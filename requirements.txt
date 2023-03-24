@@ -1,0 +1,2 @@
+pygame
+farm-ng-amiga>=0.0.9
