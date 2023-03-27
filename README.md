@@ -36,6 +36,6 @@ Make sure the xbox controller is connected to the computer and the amiga is conn
 python main.py --host 192.168.1.98 --port 50060
 ```
 
-To finally drive tha amiga, for security reasons, you need to enable the auto control mode from the Amiga Dashboard interface.
+To finally drive the amiga, for security reasons, you need to enable the auto control mode from the Amiga Dashboard interface.
 
 Learn more about the Amiga Control States here: https://amiga.farm-ng.com/docs/dashboard/control-states#amiga-control-states

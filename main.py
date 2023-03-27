@@ -16,10 +16,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-from multiprocessing import Process, Queue
+from multiprocessing import Process
+from multiprocessing import Queue
 
 import pygame
-
 from farm_ng.canbus import canbus_pb2
 from farm_ng.canbus.canbus_client import CanbusClient
 from farm_ng.service.service_client import ClientConfig
@@ -29,10 +29,11 @@ logger = logging.getLogger(__name__)
 
 
 class XboxController:
-    """This class is used to get input from an xbox controller and put in a queue."""
+    """This class is used to get input from an xbox controller."""
+
     def __init__(self, device_id: int = 0) -> None:
         """Initialize the xbox controller.
-        
+
         Args:
             device_id: the device id of the xbox controller. This is usually 0.
         """
@@ -40,12 +41,14 @@ class XboxController:
         self.command_queue = Queue(maxsize=10)
 
         # start the pygame process
-        self.process = Process(target=self.loop_pygame, args=(device_id, self.command_queue))
+        self.process = Process(
+            target=self.loop_pygame, args=(device_id, self.command_queue)
+        )
         self.process.start()  # start the subprocess
-    
+
     def loop_pygame(self, device_id: int, queue: Queue) -> None:
         """This function is run in a subprocess to get input from the xbox controller.
-        
+
         Args:
             device_id: the device id of the xbox controller.  This is usually 0.
             queue: the queue to put the messages in.
@@ -86,10 +89,11 @@ class XboxController:
 
             # tick the clock at 60hz
             clock.tick(60)
-    
+
 
 class AmigaXboxControllerClient:
     """This class is used to get input from an xbox controller and send it to the canbus service."""
+
     def __init__(self, host: str, port: int) -> None:
         """Initialize the xbox controller client and the canbus client.
 
@@ -103,20 +107,24 @@ class AmigaXboxControllerClient:
         # this is used to send messages to the canbus service
         self.canbus_client = CanbusClient(ClientConfig(address=host, port=port))
 
-    async def request_generator(self) -> iter[canbus_pb2.SendVehicleTwistCommandRequest]:
+    async def request_generator(
+        self,
+    ) -> iter[canbus_pb2.SendVehicleTwistCommandRequest]:
         """This function is used to generate the vehicle twist commands to send to the canbus service."""
         while True:
             twist_command: canbus_pb2.Twist2d = self.xbox_controller.command_queue.get()
-            print(twist_command)
             yield canbus_pb2.SendVehicleTwistCommandRequest(command=twist_command)
 
     async def run(self) -> None:
-        """This function is used to run the asyncio loop to send the vehicle twist commands to the canbus service."""
+        """This function is used to run the asyncio loop to send the vehicle twist commands to the canbus
+        service."""
         # generator function to send vehicle twist commands
-        stream = self.canbus_client.stub.sendVehicleTwistCommand(self.request_generator())
+        stream = self.canbus_client.stub.sendVehicleTwistCommand(
+            self.request_generator()
+        )
 
         # iterate over the stream to send the commands and receive the twist states
-        twist_state: canbus_pb2.Twist2d 
+        twist_state: canbus_pb2.Twist2d
         async for twist_state in stream:
             # print(twist_state)
             pass
@@ -124,9 +132,8 @@ class AmigaXboxControllerClient:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog="amiga-xbox-controller-client")
-    #parser.add_argument('--host', default='localhost')
-    parser.add_argument('--host', default='192.168.1.95')
-    parser.add_argument('--port', default=50060)
+    parser.add_argument("--host", default="localhost")
+    parser.add_argument("--port", default=50060)
     args = parser.parse_args()
 
     # create the amiga controller client with the xbox controller input
@@ -138,6 +145,6 @@ if __name__ == "__main__":
     try:
         loop.run_until_complete(controller_client.run())
     except KeyboardInterrupt:
-        pass
+        logger.info("Exiting by KeyboardInterrupt ...")
     finally:
         loop.close()
