@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
+
 import argparse
 import asyncio
 import logging
@@ -27,27 +29,40 @@ logger = logging.getLogger(__name__)
 
 
 class XboxController:
-    def __init__(self, host: str, port: int, device_id: int = 0) -> None:
-        # the canbus client is used to send messages to the canbus service
-        self.canbus_client = CanbusClient(ClientConfig(address=host, port=port))
+    """This class is used to get input from an xbox controller and put in a queue."""
+    def __init__(self, device_id: int = 0) -> None:
+        """Initialize the xbox controller.
+        
+        Args:
+            device_id: the device id of the xbox controller. This is usually 0.
+        """
+        # the queue is used to share messages between the pygame process and the asyncio loop
+        self.command_queue = Queue(maxsize=10)
 
-        self.queue = Queue(10)
-
-        self.process = Process(target=self.run_pygame, args=(device_id, self.queue))
-        self.process.start()
-
+        # start the pygame process
+        self.process = Process(target=self.loop_pygame, args=(device_id, self.command_queue))
+        self.process.start()  # start the subprocess
     
-    def run_pygame(self, device_id: int, queue: Queue) -> None:
+    def loop_pygame(self, device_id: int, queue: Queue) -> None:
+        """This function is run in a subprocess to get input from the xbox controller.
+        
+        Args:
+            device_id: the device id of the xbox controller.  This is usually 0.
+            queue: the queue to put the messages in.
+        """
         # initialize the pygame joystick module
         pygame.init()
+
         clock = pygame.time.Clock()
 
+        # make sure the xbox controller is detected, otherwise raise an error
         assert pygame.joystick.get_count() > 0, "No joysticks detected"
+
+        # initialize the xbox controller with the given device id
         joystick = pygame.joystick.Joystick(device_id)
         joystick.init()
-        print("Detected joystick '", joystick.get_name(), "'")
 
-        scale_factor = 1.0
+        logger.info(f"Detected joystick {joystick.get_name()}")
 
         while True:
             # NOTE: this seems to be necessary to keep the pygame event queue
@@ -55,51 +70,74 @@ class XboxController:
                 pass
 
             # axis 1 is left stick up/down
-            axis_linear = joystick.get_axis(1)
-            #print(f"left stick up/down: {axis_linear}")
+            axis_linear: float = joystick.get_axis(1)
+            axis_angular: float = joystick.get_axis(3)
 
-            axis_angular = joystick.get_axis(3)
-            #print(f"right stick left/right: {axis_angular}")
-
-            twist_command=canbus_pb2.Twist2d(
-                linear_velocity_x=-axis_linear * scale_factor,
+            # create a twist data structure from the joystick input
+            # NOTE: the joystick input is inverted, so we need to invert the linear velocity
+            twist_command = canbus_pb2.Twist2d(
+                linear_velocity_x=-axis_linear,
                 linear_velocity_y=0.0,
-                angular_velocity=-axis_angular * scale_factor,
+                angular_velocity=-axis_angular,
             )
-            #print(f"run_pygame {twist_command}")
-            #print(f"run_pygame {count}")
-            #print("------------------------")
+
+            # put the twist command in the queue
             queue.put(twist_command)
 
             # tick the clock at 60hz
             clock.tick(60)
     
-    async def request_generator(self) -> None:
+
+class AmigaXboxControllerClient:
+    """This class is used to get input from an xbox controller and send it to the canbus service."""
+    def __init__(self, host: str, port: int) -> None:
+        """Initialize the xbox controller client and the canbus client.
+
+        Args:
+            host: the host of the canbus service.
+            port: the port of the canbus service.
+        """
+        # this is used to get input from the xbox controller
+        self.xbox_controller = XboxController()
+
+        # this is used to send messages to the canbus service
+        self.canbus_client = CanbusClient(ClientConfig(address=host, port=port))
+
+    async def request_generator(self) -> iter[canbus_pb2.SendVehicleTwistCommandRequest]:
+        """This function is used to generate the vehicle twist commands to send to the canbus service."""
         while True:
-            twist_command: canbus_pb2.Twist2d = self.queue.get()
+            twist_command: canbus_pb2.Twist2d = self.xbox_controller.command_queue.get()
+            print(twist_command)
             yield canbus_pb2.SendVehicleTwistCommandRequest(command=twist_command)
 
     async def run(self) -> None:
+        """This function is used to run the asyncio loop to send the vehicle twist commands to the canbus service."""
         # generator function to send vehicle twist commands
         stream = self.canbus_client.stub.sendVehicleTwistCommand(self.request_generator())
 
+        # iterate over the stream to send the commands and receive the twist states
+        twist_state: canbus_pb2.Twist2d 
         async for twist_state in stream:
-            #print(twist_state)
+            # print(twist_state)
             pass
-
-async def main(host: str, port: int) -> None:
-    controller = XboxController(host=host, port=port)
-    await asyncio.gather(controller.run())
-    
-    #await asyncio.gather(controller.run_pygame(), controller.run())
-    #await asyncio.gather(controller.run_pygame())
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog="amiga-xbox-controller-client")
     #parser.add_argument('--host', default='localhost')
-    parser.add_argument('--host', default='192.168.1.98')
+    parser.add_argument('--host', default='192.168.1.95')
     parser.add_argument('--port', default=50060)
     args = parser.parse_args()
 
-    asyncio.run(main(args.host, args.port))
+    # create the amiga controller client with the xbox controller input
+    controller_client = AmigaXboxControllerClient(args.host, args.port)
+
+    # run the asyncio loop
+    loop = asyncio.get_event_loop()
+
+    try:
+        loop.run_until_complete(controller_client.run())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        loop.close()
